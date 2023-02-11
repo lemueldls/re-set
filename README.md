@@ -1,3 +1,3 @@
 # re-set
 
-Regular expression sets at compile time.
+Regular expression set parser at compile and run time.
