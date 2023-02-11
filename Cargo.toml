@@ -3,7 +3,7 @@ description = "Regular expression set parser at run time."
 edition = "2021"
 license-file = "LICENSE"
 name = "re-set"
-version = "0.0.3-alpha.0"
+version = "0.0.3"
 
 [workspace]
 members = ["macros"]
