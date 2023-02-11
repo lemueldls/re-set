@@ -1,0 +1,11 @@
+[package]
+edition = "2021"
+name = "re-set"
+version = "0.0.0"
+
+[workspace]
+members = ["macros"]
+
+[dependencies]
+regex = "1.7.1"
+regex-syntax = "0.6.28"
