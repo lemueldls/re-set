@@ -1,11 +1,10 @@
 use proc_macro::TokenStream;
-use proc_macro2::Ident;
+use proc_macro2::{Ident, Span};
 use proc_macro_error::{abort, proc_macro_error, ResultExt};
 use quote::quote;
 use re_set::{
-    parse_program,
     state::{CasePattern, Compiler},
-    ParsedProgram,
+    ProgramPatterns,
 };
 use syn::{
     parse,
@@ -14,36 +13,42 @@ use syn::{
 };
 
 struct Expressions {
+    is_public: bool,
     ident: Ident,
     exprs: Vec<LitStr>,
 }
 
 impl Parse for Expressions {
     fn parse(input: ParseStream) -> Result<Self> {
-        let ident = input.parse()?;
-        input.parse::<Token![|]>()?;
+        let is_public = input.parse::<Token![pub]>().is_ok();
 
-        let mut exprs = Vec::new();
+        input.parse::<Token![fn]>()?;
 
-        loop {
-            let expr = input.parse()?;
-            exprs.push(expr);
+        let ident = input.parse::<Ident>()?;
 
-            if input.is_empty() {
-                break;
-            }
+        let exprs = input
+            .parse_terminated::<LitStr, Token![,]>(|input| input.parse::<LitStr>())?
+            .into_iter()
+            .collect();
 
-            input.parse::<Token![|]>()?;
-        }
-
-        Ok(Self { ident, exprs })
+        Ok(Self {
+            is_public,
+            ident,
+            exprs,
+        })
     }
 }
 
 #[proc_macro]
 #[proc_macro_error]
 pub fn find(input: TokenStream) -> TokenStream {
-    let Expressions { ident, exprs } = parse(input).unwrap_or_abort();
+    let Expressions {
+        is_public,
+        ident,
+        exprs,
+    } = parse(input).unwrap_or_abort();
+
+    let public = is_public.then(|| quote!(pub));
 
     let compiler = Compiler::new().bytes(true);
 
@@ -60,23 +65,26 @@ pub fn find(input: TokenStream) -> TokenStream {
         )
         .unwrap();
 
-    let ParsedProgram { steps, ends } = parse_program(&program);
+    let patterns = ProgramPatterns::new(&program);
 
-    let size = (2_u8 << (steps.len() / 256)) * 4;
-    let u_shrink = |n| LitInt::new(&format!("{n}u{size}"), proc_macro2::Span::call_site());
+    let max_size = patterns.step_size();
+    let u_shrink = |n| LitInt::new(&format!("{n}u{max_size}"), Span::call_site());
 
-    let step_matches = steps
+    let u_first = u_shrink(patterns.first_step());
+
+    let step_matches = patterns
+        .steps
         .into_iter()
         .map(|(position, step_cases)| {
             let char_matches = step_cases.into_iter().map(|step_case| {
-                let start = step_case.char_range.start();
-                let end = step_case.char_range.end();
+                let start = step_case.byte_range.start();
+                let end = step_case.byte_range.end();
 
                 match step_case.next_case {
-                    CasePattern::Step(next_step) => {
+                    CasePattern::Step(next_step, conditions) => {
                         let u_next = u_shrink(next_step);
 
-                        if ends.contains_key(&next_step) {
+                        if patterns.ends.contains_key(&next_step) {
                             quote! {
                                 #start..=#end => {
                                     last_match = (#u_next, i);
@@ -84,8 +92,25 @@ pub fn find(input: TokenStream) -> TokenStream {
                                 }
                             }
                         } else {
+                            let conditions = conditions.into_iter().map(|(step, range)| {
+                                let start = range.start();
+                                let end = range.end();
+
+                                let u_step = u_shrink(step);
+
+                                quote! {
+                                    if (#start..=#end).contains(&next) {
+                                        last_match = (#u_step, i);
+                                    }
+                                }
+                            });
+
                             quote! {
-                                #start..=#end => step = #u_next
+                                #start..=#end => {
+                                    #(#conditions)*
+
+                                    step = #u_next
+                                }
                             }
                         }
                     }
@@ -97,24 +122,24 @@ pub fn find(input: TokenStream) -> TokenStream {
                 }
             });
 
-            let default = if let Some(match_index) = ends.get(&position) {
-                quote!(Some((#match_index, &input[..i])))
-            } else {
-                quote!(None)
-            };
-
             let u_position = u_shrink(position);
+
+            let default = if let Some(match_index) = patterns.ends.get(&position) {
+                quote!(return Some((#match_index, &input[..i])))
+            } else {
+                quote!(break)
+            };
 
             quote! {
                 #u_position => match next {
                     #(#char_matches,)*
-                    _ => return #default
+                    _ => #default
                 }
             }
         })
         .collect::<Vec<_>>();
 
-    let end_matches = ends.iter().map(|(step, match_index)| {
+    let end_matches = patterns.ends.iter().map(|(step, match_index)| {
         let u_step = u_shrink(*step);
 
         quote! {
@@ -124,9 +149,9 @@ pub fn find(input: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         #[inline]
-        fn #ident(input: &str) -> Option<(usize, &str)> {
-            let mut last_match = (0, 0);
-            let mut step = 0;
+        #public fn #ident(input: &str) -> Option<(usize, &str)> {
+            let mut last_match = (#u_first, 0);
+            let mut step = #u_first;
 
             for (i, next) in input.as_bytes().iter().enumerate() {
                 match step {
