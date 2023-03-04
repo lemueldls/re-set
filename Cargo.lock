@@ -435,7 +435,7 @@ dependencies = [
 
 [[package]]
 name = "re-set"
-version = "0.0.3"
+version = "0.1.0"
 dependencies = [
  "regex",
  "regex-syntax",
@@ -443,7 +443,7 @@ dependencies = [
 
 [[package]]
 name = "re-set-macros"
-version = "0.0.3"
+version = "0.1.0"
 dependencies = [
  "criterion",
  "proc-macro-error",
