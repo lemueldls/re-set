@@ -9,18 +9,18 @@ use re_set::{
 use syn::{
     parse,
     parse::{Parse, ParseStream},
-    LitInt, LitStr, Result, Token,
+    LitInt, LitStr, Result, Token, Visibility,
 };
 
 struct Expressions {
-    is_public: bool,
+    vis: Visibility,
     ident: Ident,
     exprs: Vec<LitStr>,
 }
 
 impl Parse for Expressions {
     fn parse(input: ParseStream) -> Result<Self> {
-        let is_public = input.parse::<Token![pub]>().is_ok();
+        let vis = input.parse::<Visibility>()?;
 
         input.parse::<Token![fn]>()?;
 
@@ -31,24 +31,14 @@ impl Parse for Expressions {
             .into_iter()
             .collect();
 
-        Ok(Self {
-            is_public,
-            ident,
-            exprs,
-        })
+        Ok(Self { vis, ident, exprs })
     }
 }
 
 #[proc_macro]
 #[proc_macro_error]
 pub fn find(input: TokenStream) -> TokenStream {
-    let Expressions {
-        is_public,
-        ident,
-        exprs,
-    } = parse(input).unwrap_or_abort();
-
-    let public = is_public.then(|| quote!(pub));
+    let Expressions { vis, ident, exprs } = parse(input).unwrap_or_abort();
 
     let compiler = Compiler::new().bytes(true);
 
@@ -149,7 +139,7 @@ pub fn find(input: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         #[inline]
-        #public fn #ident(input: &str) -> Option<(usize, &str)> {
+        #vis fn #ident(input: &str) -> Option<(usize, &str)> {
             let mut last_match = (#u_first, 0);
             let mut step = #u_first;
 
