@@ -42,8 +42,7 @@ impl fmt::Debug for CasePattern {
 /// A state machine that can be used to match a regex.
 #[derive(Default)]
 pub struct StateMachine {
-    the_other: HashSet<usize>,
-    last_position: usize,
+    split_skips: HashSet<usize>,
     /// A map of steps to the pattern index they should return.
     end_patterns: HashMap<usize, usize>,
 }
@@ -69,42 +68,28 @@ impl StateMachine {
                 let mut first_steps = Vec::new();
                 let mut steps = Vec::new();
 
-                // if position > 10 {
-                //     panic!()
-                // }
-
-                if self.the_other.contains(&position) {
-                    self.last_position = position;
-
+                if self.split_skips.contains(&position) {
                     return vec![];
                 }
 
-                // self.split_skips.insert(position, position);
+                if position != goto1 {
+                    self.split_skips.insert(position);
+                }
 
-                // if self.last_step > position {
+                let steps1 = self.parse_inst(goto1, program);
 
-                // }
-
-                self.the_other.insert(position);
-
-                self.last_position = position;
-
-                self.the_other.remove(&goto1);
-
-                let mut steps1 = self.parse_inst(goto1, program).into_iter();
-
-                if let Some((_, step_cases)) = steps1.next() {
-                    first_steps.extend(step_cases);
+                if let Some((_, step_cases)) = steps1.first() {
+                    first_steps.extend(step_cases.clone());
 
                     steps.extend(steps1);
                 }
 
-                self.the_other.remove(&goto2);
+                self.split_skips.remove(&goto2);
 
-                let mut steps2 = self.parse_inst(goto2, program).into_iter();
+                let steps2 = self.parse_inst(goto2, program);
 
-                if let Some((_, step_cases)) = steps2.next() {
-                    first_steps.extend(step_cases);
+                if let Some((_, step_cases)) = steps2.first() {
+                    first_steps.extend(step_cases.clone());
 
                     steps.extend(steps2);
                 }
@@ -125,7 +110,7 @@ impl StateMachine {
                     position,
                     vec![StepCase {
                         byte_range: (inst_char.c as u8)..=(inst_char.c as u8),
-                        next_case: self.next_case(position, inst_char.goto, program),
+                        next_case: self.next_case(inst_char.goto, program),
                     }],
                 )];
 
@@ -141,7 +126,7 @@ impl StateMachine {
 
                     step_cases.push(StepCase {
                         byte_range: (*start as u8)..=(*end as u8),
-                        next_case: self.next_case(position, inst_ranges.goto, program),
+                        next_case: self.next_case(inst_ranges.goto, program),
                     });
 
                     steps.extend(self.parse_inst(program.skip(inst_ranges.goto), program));
@@ -154,7 +139,7 @@ impl StateMachine {
                     position,
                     vec![StepCase {
                         byte_range: inst_bytes.start..=inst_bytes.end,
-                        next_case: self.next_case(position, inst_bytes.goto, program),
+                        next_case: self.next_case(inst_bytes.goto, program),
                     }],
                 )];
 
@@ -186,9 +171,7 @@ impl StateMachine {
         }
     }
 
-    fn next_case(&mut self, position: usize, goto: usize, program: &Program) -> CasePattern {
-        self.last_position = position;
-
+    fn next_case(&mut self, goto: usize, program: &Program) -> CasePattern {
         let goto = program.skip(goto);
 
         if let Inst::Match(match_index) = program[goto] {
@@ -210,21 +193,9 @@ impl StateMachine {
         let mut steps1 = steps.clone();
         let steps2 = steps.clone();
 
-        // for _ in 0..100 {
-        //     for (step, step_cases) in &steps {
-        //         for step_case in step_cases {
-        //             if let CasePattern::Step(next_step) = step_case.next_case {
-        //                 if let Some(match_index) = self.end_patterns.get(&next_step)
-        // {                     self.end_patterns.insert(*step, *match_index);
-        //                 }
-        //             }
-        //         }
-        //     }
-        // }
+        let (step, step_cases) = steps.into_iter().next().unwrap();
 
-        for (step, step_cases) in steps {
-            self.extend_split_steps(step, step_cases, &mut steps1, &steps2, &mut HashSet::new());
-        }
+        self.extend_split_steps(step, step_cases, &mut steps1, &steps2, &mut HashSet::new());
 
         steps1
     }
@@ -235,10 +206,10 @@ impl StateMachine {
         first_steps: Vec<StepCase>,
         steps1: &mut [(usize, Vec<StepCase>)],
         steps2: &[(usize, Vec<StepCase>)],
-        exclude: &mut HashSet<usize>,
+        exclude: &mut HashSet<(usize, usize)>,
     ) {
         for (i, step_case1) in first_steps.iter().enumerate() {
-            for step_case2 in first_steps.iter() {
+            for step_case2 in first_steps.iter().skip(i + 1) {
                 let overlaps = step_case1
                     .byte_range
                     .clone()
@@ -249,7 +220,7 @@ impl StateMachine {
                         (CasePattern::Step(next_step1, _), CasePattern::Step(next_step2, _)) => {
                             if next_step1 != next_step2
                                 && *next_step1 != position
-                                && !exclude.contains(next_step1)
+                                && !exclude.contains(&(*next_step1, *next_step2))
                             {
                                 if let Some(match_index) = self.end_patterns.get(next_step2) {
                                     self.add_condition(
@@ -269,7 +240,7 @@ impl StateMachine {
                                     {
                                         step_cases1.extend(step_cases2.clone());
 
-                                        exclude.insert(position);
+                                        exclude.insert((*next_step1, *next_step2));
 
                                         self.extend_split_steps(
                                             *step1,
