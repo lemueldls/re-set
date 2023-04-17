@@ -3,31 +3,31 @@ use proc_macro2::{Ident, Span};
 use proc_macro_error::{abort, proc_macro_error, ResultExt};
 use quote::quote;
 use re_set::{
-    state::{CasePattern, Compiler},
-    ProgramPatterns,
+    parse::{CasePattern, Compiler},
+    StateMachine,
 };
 use syn::{
     parse,
-    parse::{Parse, ParseStream},
+    parse::{Parse, ParseBuffer, ParseStream},
     LitInt, LitStr, Result, Token, Visibility,
 };
 
 struct Expressions {
-    vis: Visibility,
+    vis: Option<Visibility>,
     ident: Ident,
     exprs: Vec<LitStr>,
 }
 
 impl Parse for Expressions {
     fn parse(input: ParseStream) -> Result<Self> {
-        let vis = input.parse::<Visibility>()?;
+        let vis = input.parse::<Visibility>().ok();
 
         input.parse::<Token![fn]>()?;
 
         let ident = input.parse::<Ident>()?;
 
         let exprs = input
-            .parse_terminated::<LitStr, Token![,]>(|input| input.parse::<LitStr>())?
+            .parse_terminated::<_, Token![,]>(|input| ParseBuffer::parse(input))?
             .into_iter()
             .collect();
 
@@ -53,9 +53,9 @@ pub fn find(input: TokenStream) -> TokenStream {
                 })
                 .collect::<Vec<_>>(),
         )
-        .unwrap();
+        .unwrap_or_else(|error| abort!(ident, error));
 
-    let patterns = ProgramPatterns::new(&program);
+    let patterns = StateMachine::new(&program);
 
     let max_size = patterns.step_size();
     let u_shrink = |n| LitInt::new(&format!("{n}u{max_size}"), Span::call_site());
@@ -67,8 +67,7 @@ pub fn find(input: TokenStream) -> TokenStream {
         .into_iter()
         .map(|(position, step_cases)| {
             let char_matches = step_cases.into_iter().map(|step_case| {
-                let start = step_case.byte_range.start();
-                let end = step_case.byte_range.end();
+                let (start, end) = step_case.byte_range;
 
                 match step_case.next_case {
                     CasePattern::Step(next_step, conditions) => {
@@ -82,10 +81,7 @@ pub fn find(input: TokenStream) -> TokenStream {
                                 }
                             }
                         } else {
-                            let conditions = conditions.into_iter().map(|(step, range)| {
-                                let start = range.start();
-                                let end = range.end();
-
+                            let conditions = conditions.into_iter().map(|(step, (start, end))| {
                                 let u_step = u_shrink(step);
 
                                 quote! {
@@ -114,11 +110,10 @@ pub fn find(input: TokenStream) -> TokenStream {
 
             let u_position = u_shrink(position);
 
-            let default = if let Some(match_index) = patterns.ends.get(&position) {
-                quote!(return Some((#match_index, &input[..i])))
-            } else {
-                quote!(break)
-            };
+            let default = patterns.ends.get(&position).map_or_else(
+                || quote!(break),
+                |match_index| quote!(return Some((#match_index, &input[..i]))),
+            );
 
             quote! {
                 #u_position => match next {
