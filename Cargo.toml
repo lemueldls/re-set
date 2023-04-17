@@ -2,17 +2,24 @@
 description = "Regular expression set parser at run time."
 name = "re-set"
 
+categories.workspace = true
 edition.workspace = true
+keywords.workspace = true
 license.workspace = true
+readme.workspace = true
+repository.workspace = true
 version.workspace = true
 
 [workspace]
 members = ["macros"]
+package.categories = ["parsing"]
 package.edition = "2021"
+package.keywords = ["regex", "regular expression", "set", "parser"]
 package.license = "Apache-2.0"
+package.readme = "README.md"
+package.repository = "https://github.com/lemueldls/re-set"
 package.version = "0.1.1"
 resolver = "2"
 
 [dependencies]
 regex = "1.7.1"
-regex-syntax = "0.6.28"
