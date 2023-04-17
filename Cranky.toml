@@ -1,0 +1,10 @@
+deny = ["clippy::correctness", "unsafe_code"]
+
+warn = [
+  "clippy::all",
+  "clippy::nursery",
+  "clippy::pedantic",
+  "clippy::cargo",
+
+  "clippy::missing_inline_in_public_items",
+]
